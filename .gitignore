@@ -1,1 +1,10 @@
-/target
+*
+!*/
+
+!.gitignore
+!Cargo.lock
+!Cargo.toml
+!.envrc
+!flake.lock
+!flake.nix
+!/src/**
