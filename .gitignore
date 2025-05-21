@@ -7,4 +7,5 @@
 !.envrc
 !flake.lock
 !flake.nix
+!rust-toolchain.toml
 !/src/**
