@@ -23,7 +23,7 @@
 //!
 //! Annotation for struct to convert struct into WimpyMutex<Self> with deref impl
 //! That way any function called on the struct that mutates it will take ownership of the struct
-
+#![feature(async_fn_traits)]
 use std::{
     cell::{Cell, RefCell, UnsafeCell},
     future::Future,
@@ -40,7 +40,7 @@ type OwnershipFlag = Rc<Cell<bool>>;
 /// currently requires single threaded async execution
 /// DOES NOT WORK WITH MULTITHREADED BC CRITICAL SECTIONS FOR ALL ASYNC POLLING NEEDS TO OVERLAP
 // TODO replace bool flag with owning task info for introspection
-struct RevocableCell<T> {
+pub struct RevocableCell<T> {
     data: UnsafeCell<T>,
     current_flag: RefCell<Weak<Cell<bool>>>,
 }
@@ -77,21 +77,21 @@ impl<T> RevocableCell<T> {
 #[derive(Debug, Clone)]
 struct PreemptionError;
 
-struct PreemptableFuture<'mutex, F: Future, T> {
+pub struct PreemptableFuture<'mutex, F: Future, T> {
     inner: F,
     requirement: &'mutex RevocableCell<T>, // should be a guard
     valid_flag: Option<OwnershipFlag>,
 }
 
-// impl<'mutex, F: Future, T> PreemptableFuture<'mutex, F, T> {
-//     fn new(inner: F, requirement: &'mutex RevocableCell<T>) -> Self {
-//         Self {
-//             inner,
-//             requirement,
-//             valid_flag: Option::None,
-//         }
-//     }
-// }
+impl<'mutex, F: Future, T> PreemptableFuture<'mutex, F, T> {
+    pub fn new(inner: F, requirement: &'mutex RevocableCell<T>) -> Self {
+        Self {
+            inner,
+            requirement,
+            valid_flag: Option::None,
+        }
+    }
+}
 
 impl<F: Future, T> Future for PreemptableFuture<'_, F, T> {
     type Output = Result<F::Output, PreemptionError>;
@@ -116,26 +116,71 @@ impl<F: Future, T> Future for PreemptableFuture<'_, F, T> {
     }
 }
 
-// impl<F: Future, T> Drop for PreemptableFuture<F, T> {
-//     fn drop(&mut self) {
-//         // TODO relinquish mutex lock
-//         // this is necessary for situations where a subsystem is uncommanded
-//         // since default commands should be triggered in this situation
-//         todo!()
-//     }
-// }
+pub trait StandardTask<Requirement> {
+    type Future: Future;
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+    fn with_requirement<'mutex>(
+        &mut self,
+        requirement: &'mutex RevocableCell<Requirement>,
+    ) -> PreemptableFuture<'mutex, Self::Future, Requirement>;
+}
+
+impl<'a, Func, Requirement> StandardTask<Requirement> for Func
+where
+    Func: AsyncFnMut(&mut Requirement),
+{
+    type Future = Func::CallRefFuture<'a>;
+
+    fn with_requirement<'mutex>(
+        &mut self,
+        requirement: &'mutex RevocableCell<Requirement>,
+    ) -> PreemptableFuture<'mutex, Self::Future, Requirement> {
+        let data = requirement.data.get_mut();
+        let inner = self.async_call_mut((data,));
+        PreemptableFuture {
+            inner,
+            requirement,
+            valid_flag: Option::None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    struct PollForever {}
+
+    impl Future for PollForever {
+        type Output = i32;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn flag_stealing() {
+        let cell = RevocableCell::new(2);
+        assert!(!cell.is_claimed());
+        assert!(cell.current_flag.borrow().upgrade().is_none());
+        let flag = cell.steal_flag();
+        assert!(flag.get());
+        assert!(cell.is_claimed());
+        // steal new flag
+        let new_flag = cell.steal_flag();
+        assert!(!flag.get());
+        assert!(new_flag.get());
+        assert!(cell.is_claimed());
+        drop(new_flag);
+        assert!(!cell.is_claimed());
+    }
+
+    #[test]
+    fn future_mutexing() {
+        let mut resource = RevocableCell::new(0);
+        let fut_1 = PreemptableFuture::new(PollForever {}, requirement);
+        let fut_2 = PollForever {};
     }
 }

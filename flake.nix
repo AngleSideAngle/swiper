@@ -3,16 +3,34 @@
     flake-utils.url = "github:numtide/flake-utils";
     naersk.url = "github:nix-community/naersk";
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs-mozilla = {
+      url = "github:mozilla/nixpkgs-mozilla";
+      flake = false;
+    };
   };
 
-  outputs = { self, flake-utils, naersk, nixpkgs }:
+  outputs = { self, flake-utils, naersk, nixpkgs, nixpkgs-mozilla }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = (import nixpkgs) {
           inherit system;
+          overlays = [
+            (import nixpkgs-mozilla)
+          ];
         };
 
-        naersk' = pkgs.callPackage naersk {};
+        toolchain = (pkgs.rustChannelOf {
+          rustToolchain = ./rust-toolchain.toml;
+          sha256 = "";
+          #        ^ After you run `nix build`, replace this with the actual
+          #          hash from the error message
+        }).rust;
+
+
+        naersk' = pkgs.callPackage naersk {
+          cargo = toolchain;
+          rustc = toolchain;
+        };
 
       in {
         # For `nix build` & `nix run`:
