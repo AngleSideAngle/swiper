@@ -1,8 +1,3 @@
-[package]
-name = "swiper"
-version = "0.0.0"
-edition = "2024"
-description = "placeholder for async task managemenet library"
-license = "MIT OR Apache-2.0"
-
-[dependencies]
+[workspace]
+resolver = "3"
+members = ["core/*"]

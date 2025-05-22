@@ -23,14 +23,16 @@
 //!
 //! Annotation for struct to convert struct into WimpyMutex<Self> with deref impl
 //! That way any function called on the struct that mutates it will take ownership of the struct
-#![feature(async_fn_traits)]
-use std::{
+// #![feature(async_fn_traits)]
+// #![cfg_attr(not(feature = "std"), no_std)]
+
+use core::{
     cell::{Cell, RefCell, UnsafeCell},
     future::Future,
     pin::Pin,
-    rc::{Rc, Weak},
     task::{Context, Poll},
 };
+use std::rc::{Rc, Weak};
 
 struct LastThiefInfo {}
 
@@ -75,7 +77,7 @@ impl<T> RevocableCell<T> {
 }
 
 #[derive(Debug, Clone)]
-struct PreemptionError;
+pub struct PreemptionError;
 
 pub struct PreemptableFuture<'mutex, F: Future, T> {
     inner: F,
@@ -116,37 +118,59 @@ impl<F: Future, T> Future for PreemptableFuture<'_, F, T> {
     }
 }
 
-pub trait StandardTask<Requirement> {
-    type Future: Future;
+// pub fn with_requirement<Requirement, Out, Fut, Func>(
+//     func: Func,
+//     requirement: &RevocableCell<Requirement>,
+// ) -> PreemptableFuture<'_, Fut, Requirement>
+// where
+//     Func: AsyncFnOnce(&mut Requirement) -> Out,
+//     Fut: Future<Output = Out>,
+// {
+//     let data = unsafe { &mut *requirement.data.get() };
+//     let inner = func(data);
+//     PreemptableFuture {
+//         inner,
+//         requirement,
+//         valid_flag: Option::None,
+//     }
+// }
 
-    fn with_requirement<'mutex>(
-        &mut self,
-        requirement: &'mutex RevocableCell<Requirement>,
-    ) -> PreemptableFuture<'mutex, Self::Future, Requirement>;
-}
+// this functionality seems to depend on async_fn_traits
+// https://doc.rust-lang.org/unstable-book/library-features/async-fn-traits.html?highlight=async_fn#async_fn_traits
+// looks like this is blocking on variadic generics, which won't be here anytime soon
 
-impl<'a, Func, Requirement> StandardTask<Requirement> for Func
-where
-    Func: AsyncFnMut(&mut Requirement),
-{
-    type Future = Func::CallRefFuture<'a>;
+// pub trait StandardTask<Requirement, Output, Func>
+// where
+//     Func: AsyncFnMut(&mut Requirement) -> Output,
+// {
+//     fn with_requirement<'mutex>(
+//         &mut self,
+//         requirement: &'mutex RevocableCell<Requirement>,
+//     ) -> PreemptableFuture<'mutex, Func::CallRefFuture, Requirement>;
+// }
 
-    fn with_requirement<'mutex>(
-        &mut self,
-        requirement: &'mutex RevocableCell<Requirement>,
-    ) -> PreemptableFuture<'mutex, Self::Future, Requirement> {
-        let data = requirement.data.get_mut();
-        let inner = self.async_call_mut((data,));
-        PreemptableFuture {
-            inner,
-            requirement,
-            valid_flag: Option::None,
-        }
-    }
-}
+// // FnMut -> Future could be ASyncFnMut when async_fn_traits gets stable
+// impl<Requirement, Output, Func> StandardTask<Requirement, Output> for Func
+// where
+//     Func: AsyncFnMut(&mut Requirement) -> Output,
+// {
+//     fn with_requirement<'mutex>(
+//         &mut self,
+//         requirement: &'mutex RevocableCell<Requirement>,
+//     ) -> PreemptableFuture<'mutex, Func::CallRefFuture, Requirement> {
+//         let data = requirement.data.get_mut();
+//         let inner = self(data);
+//         PreemptableFuture {
+//             inner,
+//             requirement,
+//             valid_flag: Option::None,
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     struct PollForever {}
@@ -177,10 +201,21 @@ mod tests {
         assert!(!cell.is_claimed());
     }
 
-    #[test]
-    fn future_mutexing() {
-        let mut resource = RevocableCell::new(0);
-        let fut_1 = PreemptableFuture::new(PollForever {}, requirement);
-        let fut_2 = PollForever {};
+    async fn incr(x: &mut String) {
+        x.push('h');
     }
+
+    // #[test]
+    // fn future_mutexing() {
+    //     let mut resource = RevocableCell::new("hi".to_string());
+    //     // let incr = async |x: &mut String| loop {
+    //     //     x.push('h');
+    //     // };
+    //     let add_j = async |x: &mut String| loop {
+    //         x.push('j');
+    //     };
+
+    //     let fut_1 = with_requirement(incr, &resource);
+    //     let fut_2 = with_requirement(add_j, &resource);
+    // }
 }

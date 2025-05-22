@@ -19,17 +19,14 @@
           ];
         };
 
-        toolchain = (pkgs.rustChannelOf {
-          rustToolchain = ./rust-toolchain.toml;
-          sha256 = "";
-          #        ^ After you run `nix build`, replace this with the actual
-          #          hash from the error message
-        }).rust;
-
+        # toolchain = (pkgs.rustChannelOf {
+        #   rustToolchain = ./rust-toolchain.toml;
+        #   sha256 = "sha256-Xb/lE3DAZPNhrxCqtWiCfKBTHuWl0e0c7ZYbqrzjFeI=";
+        # }).rust;
 
         naersk' = pkgs.callPackage naersk {
-          cargo = toolchain;
-          rustc = toolchain;
+          # cargo = toolchain;
+          # rustc = toolchain;
         };
 
       in {
