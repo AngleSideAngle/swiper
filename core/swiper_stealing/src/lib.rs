@@ -23,79 +23,71 @@
 //!
 //! Annotation for struct to convert struct into WimpyMutex<Self> with deref impl
 //! That way any function called on the struct that mutates it will take ownership of the struct
-// #![feature(async_fn_traits)]
-// #![cfg_attr(not(feature = "std"), no_std)]
+
+#![cfg_attr(not(feature = "std"), no_std)]
 
 use core::{
-    cell::{Cell, RefCell, UnsafeCell},
+    cell::{Cell, UnsafeCell},
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
-use std::rc::{Rc, Weak};
 
 struct LastThiefInfo {}
-
-type OwnershipFlag = Rc<Cell<bool>>;
 
 /// this gets revoked, unsafe to manually interact with outside of PreemptableFuture api
 /// currently requires single threaded async execution
 /// DOES NOT WORK WITH MULTITHREADED BC CRITICAL SECTIONS FOR ALL ASYNC POLLING NEEDS TO OVERLAP
 // TODO replace bool flag with owning task info for introspection
-pub struct RevocableCell<T> {
+pub struct RevocableCell<'flag, T> {
     data: UnsafeCell<T>,
-    current_flag: RefCell<Weak<Cell<bool>>>,
+    current_flag: Cell<Option<&'flag Cell<Option<bool>>>>,
 }
 
-impl<T> RevocableCell<T> {
+impl<'flag, T> RevocableCell<'flag, T> {
     pub fn new(data: T) -> Self {
         Self {
             data: data.into(),
-            current_flag: RefCell::new(Weak::new()),
+            current_flag: Cell::new(None),
         }
     }
 
-    pub fn steal_flag(&self) -> OwnershipFlag {
-        if let Some(flag) = self.current_flag.borrow().upgrade() {
-            // revoke previous guard's access
-            flag.set(false);
+    pub fn steal_flag(&self, new_flag: &'flag Cell<Option<bool>>) {
+        // revoke previous flag pointer (set to false)
+        if let Some(previous_flag_ptr) = self.current_flag.get() {
+            previous_flag_ptr.set(Some(false));
         }
 
-        // replace revoked flag with newly claimed flag
-        let new_flag = Rc::new(Cell::new(true));
-        self.current_flag.replace(Rc::downgrade(&new_flag));
-
-        new_flag
+        // replace old flag with new flag (set to true)
+        new_flag.set(Some(true));
+        self.current_flag.set(Some(new_flag));
     }
 
     pub fn is_claimed(&self) -> bool {
-        self.current_flag
-            .borrow()
-            .upgrade()
-            .is_some_and(|cell| cell.get())
+        self.current_flag.get().is_some_and(|cell| cell.get().unwrap_or(false))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct PreemptionError;
 
-pub struct PreemptableFuture<'mutex, F: Future, T> {
+pub struct PreemptableFuture<'mutex, 'flag, F: Future, T> where 'flag: 'mutex {
     inner: F,
-    requirement: &'mutex RevocableCell<T>, // should be a guard
-    valid_flag: Option<OwnershipFlag>,
+    requirement: &'mutex RevocableCell<'mutex, T>,
+    valid_flag: &'flag Cell<Option<bool>>,
 }
 
-impl<'mutex, F: Future, T> PreemptableFuture<'mutex, F, T> {
-    pub fn new(inner: F, requirement: &'mutex RevocableCell<T>) -> Self {
-        Self {
-            inner,
-            requirement,
-            valid_flag: Option::None,
-        }
-    }
-}
+// impl<'mutex, F: Future, T> PreemptableFuture<'mutex, F, T> {
+//     fn new(inner: F, requirement: &'mutex RevocableCell<'mutex, T>) -> Self {
+//         Self {
+//             inner,
+//             requirement,
+//             valid_flag: Cell::new(None),
+//         }
+//     }
+// }
 
-impl<F: Future, T> Future for PreemptableFuture<'_, F, T> {
+impl<F: Future, T> Future for PreemptableFuture<'_, '_, F, T> {
     type Output = Result<F::Output, PreemptionError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -106,11 +98,13 @@ impl<F: Future, T> Future for PreemptableFuture<'_, F, T> {
         let instance = unsafe { self.get_unchecked_mut() };
         let inner = unsafe { Pin::new_unchecked(&mut instance.inner) };
         let requirement = instance.requirement;
-        let valid_flag = &mut instance.valid_flag;
+        let valid_flag = &instance.valid_flag;
 
-        let lock = valid_flag.get_or_insert_with(|| requirement.steal_flag());
+        if valid_flag.get().is_none() {
+            requirement.steal_flag(valid_flag);
+        }
 
-        if !lock.get() {
+        if !valid_flag.get().is_some_and(|c| c) {
             return Poll::Ready(Err(PreemptionError));
         }
 
@@ -187,17 +181,18 @@ mod tests {
     #[test]
     fn flag_stealing() {
         let cell = RevocableCell::new(2);
+        let flag_1 = Cell::new(None); // unclaimed flag
         assert!(!cell.is_claimed());
-        assert!(cell.current_flag.borrow().upgrade().is_none());
-        let flag = cell.steal_flag();
-        assert!(flag.get());
+        cell.steal_flag(&flag_1);
+        assert_eq!(flag_1.get(), Some(true));
         assert!(cell.is_claimed());
         // steal new flag
-        let new_flag = cell.steal_flag();
-        assert!(!flag.get());
-        assert!(new_flag.get());
+        let flag_2 = Cell::new(None);
+        cell.steal_flag(&flag_2);
+        assert_eq!(flag_1.get(), Some(false));
+        assert_eq!(flag_2.get(), Some(true));
         assert!(cell.is_claimed());
-        drop(new_flag);
+        // drop(flag_1);
         assert!(!cell.is_claimed());
     }
 
