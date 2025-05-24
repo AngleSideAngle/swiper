@@ -29,9 +29,11 @@
 use core::{
     cell::{Cell, UnsafeCell},
     future::Future,
+    option::Iter,
     pin::Pin,
     task::{Context, Poll},
 };
+use std::env::current_dir;
 
 struct LastThiefInfo {}
 
@@ -39,55 +41,44 @@ struct LastThiefInfo {}
 /// currently requires single threaded async execution
 /// DOES NOT WORK WITH MULTITHREADED BC CRITICAL SECTIONS FOR ALL ASYNC POLLING NEEDS TO OVERLAP
 // TODO replace bool flag with owning task info for introspection
-pub struct RevocableCell<'flag, T> {
+pub struct RevocableCell<T> {
     data: UnsafeCell<T>,
-    current_flag: Cell<Option<&'flag Cell<Option<bool>>>>,
+    current_flag: Cell<usize>,
+    is_required: Cell<bool>,
 }
 
-impl<'flag, T> RevocableCell<'flag, T> {
+impl<T> RevocableCell<T> {
     pub fn new(data: T) -> Self {
         Self {
             data: data.into(),
-            current_flag: Cell::new(None),
+            current_flag: Cell::new(0),
+            is_required: Cell::new(false),
         }
     }
 
-    pub fn steal_flag(&self, new_flag: &'flag Cell<Option<bool>>) {
-        // revoke previous flag pointer (set to false)
-        if let Some(previous_flag_ptr) = self.current_flag.get() {
-            previous_flag_ptr.set(Some(false));
-        }
-
-        // replace old flag with new flag (set to true)
-        new_flag.set(Some(true));
-        self.current_flag.set(Some(new_flag));
+    pub fn steal_flag(&self) -> usize {
+        // revoke previous flag pointer by incrementing
+        self.is_required.set(true);
+        let next_flag = self.current_flag.get().wrapping_add(1);
+        self.current_flag.set(next_flag);
+        next_flag
     }
 
-    pub fn is_claimed(&self) -> bool {
-        self.current_flag.get().is_some_and(|cell| cell.get().unwrap_or(false))
+    pub fn is_required(&self) -> bool {
+        self.is_required.get()
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct PreemptionError;
 
-pub struct PreemptableFuture<'mutex, 'flag, F: Future, T> where 'flag: 'mutex {
+pub struct PreemptibleFuture<'mutex, F: Future, T, const N: usize> {
     inner: F,
-    requirement: &'mutex RevocableCell<'mutex, T>,
-    valid_flag: &'flag Cell<Option<bool>>,
+    requirements: [&'mutex RevocableCell<T>; N],
+    current_flags: [Option<usize>; N],
 }
 
-// impl<'mutex, F: Future, T> PreemptableFuture<'mutex, F, T> {
-//     fn new(inner: F, requirement: &'mutex RevocableCell<'mutex, T>) -> Self {
-//         Self {
-//             inner,
-//             requirement,
-//             valid_flag: Cell::new(None),
-//         }
-//     }
-// }
-
-impl<F: Future, T> Future for PreemptableFuture<'_, '_, F, T> {
+impl<F: Future, T, const N: usize> Future for PreemptibleFuture<'_, F, T, N> {
     type Output = Result<F::Output, PreemptionError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -97,20 +88,24 @@ impl<F: Future, T> Future for PreemptableFuture<'_, '_, F, T> {
         // and the movement sensitive part (inner Future) needs to be re-pinned
         let instance = unsafe { self.get_unchecked_mut() };
         let inner = unsafe { Pin::new_unchecked(&mut instance.inner) };
-        let requirement = instance.requirement;
-        let valid_flag = &instance.valid_flag;
 
-        if valid_flag.get().is_none() {
-            requirement.steal_flag(valid_flag);
-        }
+        for (requirement, flag) in instance
+            .requirements
+            .iter()
+            .zip(instance.current_flags.iter_mut())
+        {
+            let current_flag = flag.get_or_insert_with(|| requirement.steal_flag());
 
-        if !valid_flag.get().is_some_and(|c| c) {
-            return Poll::Ready(Err(PreemptionError));
+            if *current_flag != requirement.current_flag.get() {
+                return Poll::Ready(Err(PreemptionError));
+            }
         }
 
         inner.poll(cx).map(Ok)
     }
 }
+
+// impl Drop for Future
 
 // pub fn with_requirement<Requirement, Out, Fut, Func>(
 //     func: Func,
@@ -140,7 +135,8 @@ impl<F: Future, T> Future for PreemptableFuture<'_, '_, F, T> {
 //     fn with_requirement<'mutex>(
 //         &mut self,
 //         requirement: &'mutex RevocableCell<Requirement>,
-//     ) -> PreemptableFuture<'mutex, Func::CallRefFuture, Requirement>;
+//     ) -> PreemptableFuture<'mutex, Func::CallRefFuture, Requirement>
+//     where Func: 'mutex;
 // }
 
 // // FnMut -> Future could be ASyncFnMut when async_fn_traits gets stable
@@ -152,7 +148,7 @@ impl<F: Future, T> Future for PreemptableFuture<'_, '_, F, T> {
 //         &mut self,
 //         requirement: &'mutex RevocableCell<Requirement>,
 //     ) -> PreemptableFuture<'mutex, Func::CallRefFuture, Requirement> {
-//         let data = requirement.data.get_mut();
+//         let data = requirement.data.get();
 //         let inner = self(data);
 //         PreemptableFuture {
 //             inner,
@@ -167,12 +163,17 @@ mod tests {
 
     use super::*;
 
-    struct PollForever {}
+    struct CountForever<'a> {
+        num: &'a mut i32,
+        incr: i32,
+    }
 
-    impl Future for PollForever {
+    impl Future for CountForever<'_> {
         type Output = i32;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let instance = unsafe { self.get_unchecked_mut() };
+            *instance.num += instance.incr;
             cx.waker().wake_by_ref();
             Poll::Pending
         }
@@ -180,37 +181,43 @@ mod tests {
 
     #[test]
     fn flag_stealing() {
-        let cell = RevocableCell::new(2);
-        let flag_1 = Cell::new(None); // unclaimed flag
-        assert!(!cell.is_claimed());
-        cell.steal_flag(&flag_1);
-        assert_eq!(flag_1.get(), Some(true));
-        assert!(cell.is_claimed());
-        // steal new flag
-        let flag_2 = Cell::new(None);
-        cell.steal_flag(&flag_2);
-        assert_eq!(flag_1.get(), Some(false));
-        assert_eq!(flag_2.get(), Some(true));
-        assert!(cell.is_claimed());
-        // drop(flag_1);
-        assert!(!cell.is_claimed());
+        let cell = RevocableCell::new(0);
+        {
+            assert!(!cell.is_required());
+            let a = cell.steal_flag();
+            assert!(cell.is_required());
+            assert_eq!(a, cell.current_flag.get());
+            // steal new flag
+            let b = cell.steal_flag();
+            assert_ne!(a, cell.current_flag.get());
+            assert_eq!(b, cell.current_flag.get());
+            assert!(cell.is_required());
+        }
+        // assert!(!cell.is_required());
     }
 
-    async fn incr(x: &mut String) {
-        x.push('h');
+    #[test]
+    fn future_mutexing() {
+        let resource = RevocableCell::new(0);
+
+        let plus_5 = CountForever {
+            num: unsafe { &mut *resource.data.get() },
+            incr: 5,
+        };
+        let minus_1 = CountForever {
+            num: unsafe { &mut *resource.data.get() },
+            incr: -1,
+        };
+
+        let plus_5 = PreemptibleFuture {
+            inner: plus_5,
+            requirements: [&resource],
+            current_flags: [None],
+        };
+        let minus_1 = PreemptibleFuture {
+            inner: minus_1,
+            requirements: [&resource],
+            current_flags: [None],
+        };
     }
-
-    // #[test]
-    // fn future_mutexing() {
-    //     let mut resource = RevocableCell::new("hi".to_string());
-    //     // let incr = async |x: &mut String| loop {
-    //     //     x.push('h');
-    //     // };
-    //     let add_j = async |x: &mut String| loop {
-    //         x.push('j');
-    //     };
-
-    //     let fut_1 = with_requirement(incr, &resource);
-    //     let fut_2 = with_requirement(add_j, &resource);
-    // }
 }
