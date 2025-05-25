@@ -28,6 +28,7 @@
 
 use core::{
     cell::{Cell, UnsafeCell},
+    fmt::Display,
     future::Future,
     option::Iter,
     pin::Pin,
@@ -71,6 +72,23 @@ impl<T> RevocableCell<T> {
 
 #[derive(Debug, Clone)]
 pub struct PreemptionError;
+
+impl Display for PreemptionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "task was preempted by another task stealing its resource"
+        )
+        // TODO store, report specific resources
+    }
+}
+
+impl PartialEq for PreemptionError {
+    fn eq(&self, other: &Self) -> bool {
+        true
+        // TODO fix type
+    }
+}
 
 pub struct PreemptibleFuture<'mutex, F: Future, T, const N: usize> {
     inner: F,
@@ -161,6 +179,12 @@ impl<F: Future, T, const N: usize> Future for PreemptibleFuture<'_, F, T, N> {
 #[cfg(test)]
 mod tests {
 
+    use core::{
+        future::{self, Ready},
+        hint::assert_unchecked,
+        task,
+    };
+
     use super::*;
 
     struct CountForever<'a> {
@@ -219,5 +243,33 @@ mod tests {
             requirements: [&resource],
             current_flags: [None],
         };
+
+        // start by polling plus_5
+        let mut cx_plus_5 = Context::from_waker(task::Waker::noop());
+        let mut pinned_plus_5 = Box::pin(plus_5);
+        let res = pinned_plus_5.as_mut().poll(&mut cx_plus_5);
+        assert!(res.is_pending());
+        assert_eq!(unsafe { *resource.data.get() }, 5);
+        let res = pinned_plus_5.as_mut().poll(&mut cx_plus_5);
+        assert!(res.is_pending());
+        assert_eq!(unsafe { *resource.data.get() }, 10);
+
+        // now poll minus_1, this should steal from plus_5
+        let mut cx_minus_1 = Context::from_waker(task::Waker::noop());
+        let mut pinned_minus_1 = Box::pin(minus_1);
+        let res = pinned_minus_1.as_mut().poll(&mut cx_minus_1);
+        assert!(res.is_pending());
+        assert_eq!(unsafe { *resource.data.get() }, 9);
+
+        // poll plus_5 again, should finish with preemption error
+        let res = pinned_plus_5.as_mut().poll(&mut cx_plus_5);
+        assert!(res.is_ready());
+        assert_eq!(unsafe { *resource.data.get() }, 9);
+        assert_eq!(res, Poll::Ready(Result::Err(PreemptionError {})));
+
+        // minus_1 should still work
+        let res = pinned_minus_1.as_mut().poll(&mut cx_minus_1);
+        assert!(res.is_pending());
+        assert_eq!(unsafe { *resource.data.get() }, 8);
     }
 }
