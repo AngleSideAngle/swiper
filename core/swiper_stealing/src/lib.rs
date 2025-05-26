@@ -65,6 +65,10 @@ impl<T> RevocableCell<T> {
         next_flag
     }
 
+    pub fn return_flag(&self) {
+        self.is_required.set(false);
+    }
+
     pub fn is_required(&self) -> bool {
         self.is_required.get()
     }
@@ -119,7 +123,13 @@ impl<F: Future, T, const N: usize> Future for PreemptibleFuture<'_, F, T, N> {
             }
         }
 
-        inner.poll(cx).map(Ok)
+        let res = inner.poll(cx).map(Ok);
+        if res.is_ready() {
+            for req in instance.requirements {
+                req.return_flag();
+            }
+        }
+        res
     }
 }
 
@@ -236,12 +246,12 @@ mod tests {
         let plus_5 = PreemptibleFuture {
             inner: plus_5,
             requirements: [&resource],
-            current_flags: [None],
+            current_flags: Default::default(),
         };
         let minus_1 = PreemptibleFuture {
             inner: minus_1,
             requirements: [&resource],
-            current_flags: [None],
+            current_flags: Default::default(),
         };
 
         // start by polling plus_5

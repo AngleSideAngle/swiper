@@ -1,9 +1,12 @@
 extern crate proc_macro;
 
+use std::collections::HashSet;
+
 use proc_macro::TokenStream;
-use quote::{quote, quote_spanned};
+use quote::{quote, quote_spanned, ToTokens};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, spanned::Spanned, token::Token, FnArg, Ident, ItemFn,
+    parse_macro_input, parse_quote, punctuated::Punctuated, spanned::Spanned, token::Token, FnArg,
+    Ident, ItemFn, Pat, PatIdent, PatType, Receiver,
 };
 
 // two macros
@@ -12,9 +15,9 @@ use syn::{
 
 #[proc_macro_attribute]
 pub fn preemptible(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut input = parse_macro_input!(item as ItemFn);
-    let names: Vec<syn::Ident> =
-        parse_macro_input!(attr with Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated)
+    let input = parse_macro_input!(item as ItemFn);
+    let macro_args: Vec<Ident> =
+        parse_macro_input!(attr with Punctuated::<Ident, syn::Token![,]>::parse_terminated)
             .into_iter()
             .collect();
 
@@ -26,38 +29,72 @@ pub fn preemptible(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
     }
 
-    // replace all types of function args that match proc macro arg identity with RevocableCell<>
-    for arg in &mut input.sig.inputs {
-        if let FnArg::Typed(pattern) = arg {
-            if let syn::Pat::Ident(identity) = &*pattern.pat {
-                // default behavior is wrap all arguments
-                if names.is_empty() || names.contains(&identity.ident) {
-                    let old_type = pattern.ty.clone();
-                    pattern.ty = Box::new(syn::parse_quote!( RevocableCell<#old_type> ));
+    // all mutex_args types wrapped with RevocableCell
+    let mut outer_params: Vec<FnArg> = Vec::with_capacity(input.sig.inputs.len());
+
+    // original params for inner fn definition
+    let mut inner_params: Vec<FnArg> = Vec::with_capacity(input.sig.inputs.len());
+
+    // args to be fed to origin params, all mutex_args mapped x -> unsafe { *x.data.get() }
+    let mut inner_args: Vec<proc_macro2::TokenStream> = Vec::with_capacity(input.sig.inputs.len());
+
+    // maps all RevocableCell inputs (a, d, e) -> [&a, &d, &e]
+    let mut requirements_arr = Vec::new();
+
+    for arg in &input.sig.inputs {
+        match &arg {
+            FnArg::Typed(pat) => {
+                if let Pat::Ident(ident) = &*pat.pat {
+                    if macro_args.is_empty() || macro_args.contains(&ident.ident) {
+                        outer_params.push({
+                            let old_ty = &*pat.ty;
+                            let mut new_pat = pat.clone();
+                            new_pat.ty = parse_quote!( RevocableCell<#old_ty> );
+                            FnArg::Typed(new_pat)
+                        });
+                        inner_params.push(FnArg::Typed(pat.clone()));
+                        inner_args.push(quote! { unsafe { (*#pat).data.get() } });
+                        requirements_arr.push(quote! { &#ident });
+                    }
+                } else {
+                    return TokenStream::from(quote_spanned! {
+                        pat.span() => compile_error!("this macro does not yet support destructuring function arguments");
+                    });
                 }
             }
+            FnArg::Receiver(recv) => {
+                outer_params.push(arg.clone());
+                inner_params.push(arg.clone());
+                inner_args.push(recv.self_token.to_token_stream());
+            }
         }
-        // ignore receivers to avoid breaking method calling
     }
 
-    let fn_name = &input.sig.ident;
+    let mut outer_sig = input.sig.clone();
+    outer_sig.asyncness = None;
+    outer_sig.inputs.clear();
+    outer_sig.inputs.extend(outer_params);
+
+    let mut inner_sig = input.sig.clone();
+    inner_sig.ident = parse_quote!("inner");
+    inner_sig.inputs.clear();
+    inner_sig.inputs.extend(inner_params);
+
     let fn_block = &input.block;
-    let fn_sig = &input.sig;
     let fn_attrs = &input.attrs;
     let fn_vis = &input.vis;
 
-    let mapped_args = input.sig.inputs.into_iter().map(|arg| arg).collect();
-
     let result = quote! {
         #(#fn_attrs)*
-        #fn_vis #fn_sig {
-            // for each requirement name, arg.data.get()
-            // each non requirement name is just arg
-            // internal async function is
-            let inner = #fn_block();
-            // create requirements array with all RevocableCells
-            // create empty current_flags array of Option::None of same length
-            PreemptibleFuture { inner, requirements, current_flags }
+        #fn_vis #outer_sig {
+            fn #inner_sig {
+                #fn_block
+            }
+
+            PreemptibleFuture {
+                inner: inner(#(#inner_args),*),
+                requirements: [#(#requirements_arr),*],
+                current_flags: Default::default() }
         }
     };
 
