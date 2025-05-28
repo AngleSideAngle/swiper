@@ -30,11 +30,9 @@ use core::{
     cell::{Cell, UnsafeCell},
     fmt::Display,
     future::Future,
-    option::Iter,
     pin::Pin,
     task::{Context, Poll},
 };
-use std::env::current_dir;
 
 struct LastThiefInfo {}
 
@@ -189,11 +187,7 @@ impl<F: Future, T, const N: usize> Future for PreemptibleFuture<'_, F, T, N> {
 #[cfg(test)]
 mod tests {
 
-    use core::{
-        future::{self, Ready},
-        hint::assert_unchecked,
-        task,
-    };
+    use core::task;
 
     use super::*;
 
@@ -281,5 +275,13 @@ mod tests {
         let res = pinned_minus_1.as_mut().poll(&mut cx_minus_1);
         assert!(res.is_pending());
         assert_eq!(unsafe { *resource.data.get() }, 8);
+    }
+
+    #[test]
+    fn preemptible_proc_macro() {
+        #[swiper_derive::preemptible]
+        async fn example() {
+            
+        }
     }
 }

@@ -1,9 +1,13 @@
 [package]
-name = "swiper"
-version = "0.0.0"
-edition = "2024"
+name = "swiper-stealing"
 description = "placeholder for async task managemenet library"
-license = "MIT OR Apache-2.0"
+
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 

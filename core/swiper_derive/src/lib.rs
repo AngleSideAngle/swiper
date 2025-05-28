@@ -1,12 +1,10 @@
 extern crate proc_macro;
 
-use std::collections::HashSet;
-
 use proc_macro::TokenStream;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{
-    parse_macro_input, parse_quote, punctuated::Punctuated, spanned::Spanned, token::Token, FnArg,
-    Ident, ItemFn, Pat, PatIdent, PatType, Receiver,
+    parse_macro_input, parse_quote, punctuated::Punctuated, spanned::Spanned, FnArg, Ident, ItemFn,
+    Pat,
 };
 
 // two macros
@@ -94,7 +92,8 @@ pub fn preemptible(attr: TokenStream, item: TokenStream) -> TokenStream {
             PreemptibleFuture {
                 inner: inner(#(#inner_args),*),
                 requirements: [#(#requirements_arr),*],
-                current_flags: Default::default() }
+                current_flags: Default::default()
+            }
         }
     };
 

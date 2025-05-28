@@ -1,5 +1,5 @@
 [package]
-name = "swiper-derive"
+name = "swiper"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -7,10 +7,6 @@ license.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
-[lib]
-proc-macro = true
-
 [dependencies]
-syn = { version = "2", features = ["full"] }
-quote = "1"
-proc-macro2 = "1"
+swiper-stealing = { workspace = true }
+swiper-derive = { workspace = true }
