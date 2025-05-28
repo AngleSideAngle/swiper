@@ -23,15 +23,23 @@ dependencies = [
 [[package]]
 name = "swiper"
 version = "0.0.0"
+dependencies = [
+ "swiper-derive",
+ "swiper-stealing",
+]
 
 [[package]]
-name = "swiper_derive"
-version = "0.1.0"
+name = "swiper-derive"
+version = "0.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "swiper-stealing"
+version = "0.0.0"
 
 [[package]]
 name = "syn"

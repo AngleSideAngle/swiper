@@ -1,5 +1,4 @@
 *
-!*/
 
 !.gitignore
 !Cargo.lock
@@ -8,4 +7,5 @@
 !flake.lock
 !flake.nix
 !rust-toolchain.toml
+!/core/
 !/core/**

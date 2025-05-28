@@ -1,3 +1,17 @@
 [workspace]
 resolver = "3"
 members = ["core/*"]
+
+[workspace.package]
+version = "0.0.0"
+rust-version = "1.86"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Asa Paparo <asapaparo@gmail.com>"]
+repository = "https://github.com/AngleSideAngle/swiper"
+homepage = "https://github.com/AngleSideAngle/swiper"
+
+[workspace.dependencies]
+swiper = { path = "core/swiper" }
+swiper-stealing = { path = "core/swiper_stealing" }
+swiper-derive = { path = "core/swiper_derive" }

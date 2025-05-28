@@ -30,11 +30,20 @@ use core::{
     cell::{Cell, UnsafeCell},
     fmt::Display,
     future::Future,
+    marker::Tuple,
     pin::Pin,
     task::{Context, Poll},
 };
 
 struct LastThiefInfo {}
+
+// used for pointers to RevocableCell that don't depend on type
+pub trait Revocable {
+    fn steal_flag(&self) -> usize;
+    fn return_flag(&self);
+    fn get_current_flag(&self) -> usize;
+    fn is_required(&self) -> bool;
+}
 
 /// this gets revoked, unsafe to manually interact with outside of PreemptableFuture api
 /// currently requires single threaded async execution
@@ -54,8 +63,10 @@ impl<T> RevocableCell<T> {
             is_required: Cell::new(false),
         }
     }
+}
 
-    pub fn steal_flag(&self) -> usize {
+impl<T> Revocable for RevocableCell<T> {
+    fn steal_flag(&self) -> usize {
         // revoke previous flag pointer by incrementing
         self.is_required.set(true);
         let next_flag = self.current_flag.get().wrapping_add(1);
@@ -63,11 +74,15 @@ impl<T> RevocableCell<T> {
         next_flag
     }
 
-    pub fn return_flag(&self) {
+    fn return_flag(&self) {
         self.is_required.set(false);
     }
 
-    pub fn is_required(&self) -> bool {
+    fn get_current_flag(&self) -> usize {
+        self.current_flag.get()
+    }
+
+    fn is_required(&self) -> bool {
         self.is_required.get()
     }
 }
@@ -92,14 +107,36 @@ impl PartialEq for PreemptionError {
     }
 }
 
-pub struct PreemptibleFuture<'mutex, F: Future, T, const N: usize> {
-    inner: F,
-    requirements: [&'mutex RevocableCell<T>; N],
+pub struct PreemptibleFuture<'mutex, Fut, Output, const N: usize>
+where
+    Fut: Future<Output = Output>,
+{
+    inner: Fut,
+    requirements: [&'mutex dyn Revocable; N],
     current_flags: [Option<usize>; N],
 }
 
-impl<F: Future, T, const N: usize> Future for PreemptibleFuture<'_, F, T, N> {
-    type Output = Result<F::Output, PreemptionError>;
+// impl<'mutex, Fut, Output, const N: usize> PreemptibleFuture<'mutex, Fut, Output, N>
+// where
+//     Fut: Future<Output = Output>,
+// {
+//     fn from_fn<Args: Tuple, Fun: AsyncFnMut(Args) -> Output>(
+//         fun: Fun,
+//         requirements: [&'mutex dyn Revocable; N],
+//     ) -> Self {
+//         Self {
+//             inner: fun(),
+//             requirements,
+//             current_flags: [None; N],
+//         }
+//     }
+// }
+
+impl<Fut, Output, const N: usize> Future for PreemptibleFuture<'_, Fut, Output, N>
+where
+    Fut: Future<Output = Output>,
+{
+    type Output = Result<Output, PreemptionError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // pin guarantees all movement sensitive data is not moved
@@ -116,7 +153,7 @@ impl<F: Future, T, const N: usize> Future for PreemptibleFuture<'_, F, T, N> {
         {
             let current_flag = flag.get_or_insert_with(|| requirement.steal_flag());
 
-            if *current_flag != requirement.current_flag.get() {
+            if *current_flag != requirement.get_current_flag() {
                 return Poll::Ready(Err(PreemptionError));
             }
         }
@@ -130,59 +167,6 @@ impl<F: Future, T, const N: usize> Future for PreemptibleFuture<'_, F, T, N> {
         res
     }
 }
-
-// impl Drop for Future
-
-// pub fn with_requirement<Requirement, Out, Fut, Func>(
-//     func: Func,
-//     requirement: &RevocableCell<Requirement>,
-// ) -> PreemptableFuture<'_, Fut, Requirement>
-// where
-//     Func: AsyncFnOnce(&mut Requirement) -> Out,
-//     Fut: Future<Output = Out>,
-// {
-//     let data = unsafe { &mut *requirement.data.get() };
-//     let inner = func(data);
-//     PreemptableFuture {
-//         inner,
-//         requirement,
-//         valid_flag: Option::None,
-//     }
-// }
-
-// this functionality seems to depend on async_fn_traits
-// https://doc.rust-lang.org/unstable-book/library-features/async-fn-traits.html?highlight=async_fn#async_fn_traits
-// looks like this is blocking on variadic generics, which won't be here anytime soon
-
-// pub trait StandardTask<Requirement, Output, Func>
-// where
-//     Func: AsyncFnMut(&mut Requirement) -> Output,
-// {
-//     fn with_requirement<'mutex>(
-//         &mut self,
-//         requirement: &'mutex RevocableCell<Requirement>,
-//     ) -> PreemptableFuture<'mutex, Func::CallRefFuture, Requirement>
-//     where Func: 'mutex;
-// }
-
-// // FnMut -> Future could be ASyncFnMut when async_fn_traits gets stable
-// impl<Requirement, Output, Func> StandardTask<Requirement, Output> for Func
-// where
-//     Func: AsyncFnMut(&mut Requirement) -> Output,
-// {
-//     fn with_requirement<'mutex>(
-//         &mut self,
-//         requirement: &'mutex RevocableCell<Requirement>,
-//     ) -> PreemptableFuture<'mutex, Func::CallRefFuture, Requirement> {
-//         let data = requirement.data.get();
-//         let inner = self(data);
-//         PreemptableFuture {
-//             inner,
-//             requirement,
-//             valid_flag: Option::None,
-//         }
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -275,13 +259,5 @@ mod tests {
         let res = pinned_minus_1.as_mut().poll(&mut cx_minus_1);
         assert!(res.is_pending());
         assert_eq!(unsafe { *resource.data.get() }, 8);
-    }
-
-    #[test]
-    fn preemptible_proc_macro() {
-        #[swiper_derive::preemptible]
-        async fn example() {
-            
-        }
     }
 }
