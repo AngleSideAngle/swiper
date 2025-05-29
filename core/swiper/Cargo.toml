@@ -12,4 +12,5 @@ swiper-stealing = { workspace = true }
 swiper-derive = { workspace = true }
 
 [dev-dependencies]
-lite-async-test = "0.1.3"
+lite-async-test = "0.1"
+futures-lite = "2.6"

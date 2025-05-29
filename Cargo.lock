@@ -78,6 +78,7 @@ dependencies = [
 name = "swiper"
 version = "0.0.0"
 dependencies = [
+ "futures-lite",
  "lite-async-test",
  "swiper-derive",
  "swiper-stealing",

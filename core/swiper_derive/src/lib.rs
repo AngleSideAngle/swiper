@@ -2,11 +2,10 @@ extern crate proc_macro;
 
 use core::fmt;
 
-use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote, quote_spanned};
+use quote::{format_ident, ToTokens};
 use syn::{
-    Error, Expr, FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input,
-    parse_quote, punctuated::Punctuated, spanned::Spanned,
+    parse_macro_input, parse_quote, punctuated::Punctuated, Error, Expr, FnArg, Ident, ItemFn, Pat,
+    PatType, ReturnType,
 };
 
 // two macros
@@ -34,7 +33,7 @@ pub fn preemptible(
         .into();
     }
 
-    let ir = match single_fn_to_ir(&input, macro_args) {
+    let ir = match single_fn_to_ir(&input, &macro_args) {
         Ok(ir) => ir,
         Err(e) => return e.into_compile_error().into(),
     };
@@ -95,7 +94,7 @@ fn method_to_ir() -> syn::Result<IntermediateRepr> {
 }
 
 // parses input args to create intermediate representation
-fn single_fn_to_ir(input: &ItemFn, wrapped_names: Vec<Ident>) -> syn::Result<IntermediateRepr> {
+fn single_fn_to_ir(input: &ItemFn, wrapped_names: &[Ident]) -> syn::Result<IntermediateRepr> {
     // all mutex_args types wrapped with RevocableCell
     let mut outer_params: Vec<FnArg> = Vec::with_capacity(input.sig.inputs.len());
 
@@ -218,7 +217,7 @@ mod tests {
         .into_token_stream()
         .to_string();
 
-        let expected = quote! {
+        let expected = quote::quote! {
             async fn eg(x: i32) -> core::result::Result<i32, swiper_stealing::PreemptionError> {
                 async fn inner(x: i32) -> i32 {
                     x
@@ -256,7 +255,7 @@ mod tests {
         .into_token_stream()
         .to_string();
 
-        let expected = quote! {
+        let expected = quote::quote! {
             async fn eg(x: &swiper_stealing::RevocableCell<i32>, y: i32) -> core::result::Result<i32, swiper_stealing::PreemptionError> {
                 async fn inner(x: i32, y: i32) -> i32 {
                     x + y
@@ -278,7 +277,7 @@ mod tests {
     fn fn_to_ir() {
         let out = single_fn_to_ir(
             &parse_quote! { async fn eg(a: i32, b: i32) { a + b } },
-            vec![format_ident!("a")],
+            &[format_ident!("a")],
         )
         .expect("failed to parse IR");
 

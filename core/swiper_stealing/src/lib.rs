@@ -1,29 +1,3 @@
-//! macro to wrap inner function with `MutexingFuture` and replace args with `Arc<WimpyMutex<T>>` args
-//! `MutexingFuture` wraps original function's future and validates `WimpyMutex` every time the function is polled
-//!
-//! ## Desired behaviors/granularity:
-//!
-//! ### Cancellation layer
-//!
-//! #[requirement] macro at the struct level
-//! all &mut struct interactions now need to get derefmut, which locks wimpy mutex
-//!
-//!
-//! ### Ideal Code
-//!
-//! ```rs
-//! struct Example { ... }
-//!
-//! impl for RequirementMutex<Example> {
-//!     #[enforce_mutexing]
-//!     async fn(&mut self) { ... }
-//! }
-//! ```
-//!
-//!
-//! Annotation for struct to convert struct into WimpyMutex<Self> with deref impl
-//! That way any function called on the struct that mutates it will take ownership of the struct
-
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::{
