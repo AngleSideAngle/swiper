@@ -30,7 +30,6 @@ use core::{
     cell::{Cell, UnsafeCell},
     fmt::Display,
     future::Future,
-    marker::Tuple,
     pin::Pin,
     task::{Context, Poll},
 };

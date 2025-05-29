@@ -1,14 +1,19 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+use swiper_derive::preemptible;
+
+
+#[preemptible(x)]
+async fn idk(x: i32) { x }
 
 #[cfg(test)]
 mod tests {
+    use swiper_derive::preemptible;
+
     use super::*;
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+
+        #[preemptible(x)]
+        async fn idk(x: i32) { x }
     }
 }
