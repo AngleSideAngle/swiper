@@ -1,10 +1,13 @@
 use swiper_derive::preemptible;
 
-
 #[cfg(test)]
 mod tests {
     use core::task;
-    use std::{cell::UnsafeCell, pin::Pin, task::{Context, Poll}};
+    use std::{
+        cell::UnsafeCell,
+        pin::Pin,
+        task::{Context, Poll},
+    };
 
     use lite_async_test::async_test;
     use swiper_derive::preemptible;
@@ -12,9 +15,8 @@ mod tests {
 
     use super::*;
 
-
     // dummy future that returns ready the 2nd time it's polled
-     struct WaitOnce {
+    struct WaitOnce {
         polled: bool,
     }
 
@@ -39,15 +41,6 @@ mod tests {
 
     #[test]
     fn basic_preemption() {
-        // let x = 0;
-        // let a = &x;
-        // let cell = &mut a;
-        // let cell2 = &mut a;
-        // println!("{}", a);
-        // println!("{}", cell);
-        // println!("{}", a);
-
-
         let mut inner: i32 = 0;
         let data = RevocableCell::new(&mut inner);
 
@@ -79,58 +72,25 @@ mod tests {
         for i in 1..6 {
             let res = pinned_increment.as_mut().poll(&mut cx_increment);
             assert!(res.is_pending());
-            assert_eq!(unsafe {
-                **data.data.get()
-            }, i);
+            assert_eq!(unsafe { **data.data.get() }, i);
         }
 
         // now poll decrement
         let res = pinned_decrement.as_mut().poll(&mut cx_decrement);
         assert!(res.is_pending());
-            assert_eq!(unsafe {
-                **data.data.get()
-            }, 4);
+        assert_eq!(unsafe { **data.data.get() }, 4);
 
         // increment should now be cancelled, and should not affect the data value
         let res = pinned_increment.as_mut().poll(&mut cx_increment);
         assert_eq!(res, Poll::Ready(Result::Err(PreemptionError {})));
-        assert_eq!(unsafe {
-            **data.data.get()
-        }, 4);
+        assert_eq!(unsafe { **data.data.get() }, 4);
 
-        
         // decrement should be running fine
         for i in (0..4).rev() {
             let res = pinned_decrement.as_mut().poll(&mut cx_decrement);
             assert!(res.is_pending());
-            assert_eq!(unsafe {
-                **data.data.get()
-            }, i);
+            assert_eq!(unsafe { **data.data.get() }, i);
         }
 
-        // let res = pinned_increment.as_mut().poll(&mut cx_increment);
-        // assert!(res.is_pending());
-        // assert_eq!(a, 5);
-        // let res = pinned_increment.as_mut().poll(&mut cx_increment);
-        // assert!(res.is_pending());
-        // assert_eq!(unsafe { *resource.data.get() }, 10);
-
-        // now poll decrement, this should steal from increment
-        // let mut cx_decrement = Context::from_waker(task::Waker::noop());
-        // let mut pinned_decrement = Box::pin(decrement);
-        // let res = pinned_decrement.as_mut().poll(&mut cx_decrement);
-        // assert!(res.is_pending());
-        // assert_eq!(unsafe { *resource.data.get() }, 9);
-
-        // poll increment again, should finish with preemption error
-        // let res = pinned_increment.as_mut().poll(&mut cx_increment);
-        // assert!(res.is_ready());
-        // assert_eq!(unsafe { *resource.data.get() }, 9);
-        // assert_eq!(res, Poll::Ready(Result::Err(PreemptionError {})));
-
-        // decrement should still work
-        // let res = pinned_decrement.as_mut().poll(&mut cx_decrement);
-        // assert!(res.is_pending());
-        // assert_eq!(unsafe { *resource.data.get() }, 8);
     }
 }

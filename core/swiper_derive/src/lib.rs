@@ -3,10 +3,10 @@ extern crate proc_macro;
 use core::fmt;
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote, quote_spanned, ToTokens};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::{
-    parse_macro_input, parse_quote, punctuated::Punctuated, spanned::Spanned, Error, Expr, FnArg,
-    Ident, ItemFn, Pat, PatType, ReturnType, Type,
+    Error, Expr, FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input,
+    parse_quote, punctuated::Punctuated, spanned::Spanned,
 };
 
 // two macros
