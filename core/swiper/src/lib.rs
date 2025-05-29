@@ -1,4 +1,3 @@
-use swiper_derive::preemptible;
 
 #[cfg(test)]
 mod tests {
@@ -10,7 +9,7 @@ mod tests {
     use swiper_derive::preemptible;
     use swiper_stealing::{PreemptionError, Revocable, RevocableCell};
 
-    use super::*;
+    
 
     #[test]
     fn basic_preemption() {

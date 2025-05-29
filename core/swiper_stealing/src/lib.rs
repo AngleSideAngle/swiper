@@ -9,13 +9,29 @@ use core::{
     task::{Context, Poll},
 };
 
-struct LastThiefInfo {}
+pub struct FlagHolder {
+    name: str,
+}
 
-// used for pointers to RevocableCell that don't depend on type
+/// Allows a "flag" to be stolen or released by a flag holder.
+///
+/// Flag owners must ensure they have continued access by checking their assigned `usize` against the current counter value provided by [`get_counter`](Self::get_counter).
+///
+/// This provides a type-independent reference to downcast `RevocableCell<T>` into.
 pub trait Revocable {
+    /// Increments the internal counter by 1 (wrapping addition) and returns the new value.
+    ///
+    /// This also registers a new flag holder.
+    /// TODO replace Cell<bool> with owner info
     fn steal_flag(&self) -> usize;
-    fn return_flag(&self);
-    fn get_current_flag(&self) -> usize;
+
+    /// Releases the current flag owner.
+    fn release_flag(&self);
+
+    /// Returns the current value of the internal counter.
+    fn get_counter(&self) -> usize;
+
+    /// Gets information on the current flag holder.
     fn is_required(&self) -> bool;
 }
 
@@ -29,6 +45,9 @@ pub struct RevocableCell<T> {
 }
 
 impl<T> RevocableCell<T> {
+    /// Creates a new [`RevocableCell`] with ownership of `data`.
+    ///
+    /// The cell will default having no owner (eg. is_required -> false).
     pub fn new(data: T) -> Self {
         Self {
             data: data.into(),
@@ -40,18 +59,17 @@ impl<T> RevocableCell<T> {
 
 impl<T> Revocable for RevocableCell<T> {
     fn steal_flag(&self) -> usize {
-        // revoke previous flag pointer by incrementing
         self.is_required.set(true);
         let next_flag = self.current_flag.get().wrapping_add(1);
         self.current_flag.set(next_flag);
         next_flag
     }
 
-    fn return_flag(&self) {
+    fn release_flag(&self) {
         self.is_required.set(false);
     }
 
-    fn get_current_flag(&self) -> usize {
+    fn get_counter(&self) -> usize {
         self.current_flag.get()
     }
 
@@ -62,23 +80,19 @@ impl<T> Revocable for RevocableCell<T> {
 
 impl<T> Revocable for &RevocableCell<T> {
     fn steal_flag(&self) -> usize {
-        // revoke previous flag pointer by incrementing
-        self.is_required.set(true);
-        let next_flag = self.current_flag.get().wrapping_add(1);
-        self.current_flag.set(next_flag);
-        next_flag
+        (**self).steal_flag()
     }
 
-    fn return_flag(&self) {
-        self.is_required.set(false);
+    fn release_flag(&self) {
+        (**self).release_flag();
     }
 
-    fn get_current_flag(&self) -> usize {
-        self.current_flag.get()
+    fn get_counter(&self) -> usize {
+        (**self).get_counter()
     }
 
     fn is_required(&self) -> bool {
-        self.is_required.get()
+        (**self).is_required()
     }
 }
 
@@ -102,6 +116,9 @@ impl PartialEq for PreemptionError {
     }
 }
 
+/// Wraps a [`Future`] to safetly implement preemption against other [`PreemptibleFuture`] with overlapping [`RevocableCell`] requirements.
+///
+/// See the [module-level documentation](self) for more on the preemption and requirement system.
 pub struct PreemptibleFuture<'mutex, Fut, Output, const N: usize>
 where
     Fut: Future<Output = Output>,
@@ -156,7 +173,7 @@ where
         {
             let current_flag = flag.get_or_insert_with(|| requirement.steal_flag());
 
-            if *current_flag != requirement.get_current_flag() {
+            if *current_flag != requirement.get_counter() {
                 return Poll::Ready(Err(PreemptionError));
             }
         }
@@ -164,7 +181,7 @@ where
         let res = inner.poll(cx).map(Ok);
         if res.is_ready() {
             for req in instance.requirements {
-                req.return_flag();
+                req.release_flag();
             }
         }
         res
