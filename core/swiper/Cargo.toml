@@ -10,3 +10,6 @@ repository.workspace = true
 [dependencies]
 swiper-stealing = { workspace = true }
 swiper-derive = { workspace = true }
+
+[dev-dependencies]
+lite-async-test = "0.1.3"
