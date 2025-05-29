@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![doc = include_str!("../README.md")]
 
 use core::{
     cell::{Cell, UnsafeCell},
@@ -18,10 +19,9 @@ pub trait Revocable {
     fn is_required(&self) -> bool;
 }
 
-/// this gets revoked, unsafe to manually interact with outside of PreemptableFuture api
-/// currently requires single threaded async execution
-/// DOES NOT WORK WITH MULTITHREADED BC CRITICAL SECTIONS FOR ALL ASYNC POLLING NEEDS TO OVERLAP
-// TODO replace bool flag with owning task info for introspection
+/// A pointer to a mutable location in memory that enables reference holders to call [`steal_flag()`](Self::steal_flag) to revoke flags from other reference holders.
+///
+/// This struct cannot be directly used in a safe manner, and must be accessed inside a [`PreemptibleFuture`].
 pub struct RevocableCell<T> {
     pub data: UnsafeCell<T>,
     current_flag: Cell<usize>,
@@ -81,6 +81,7 @@ impl<T> Revocable for &RevocableCell<T> {
         self.is_required.get()
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct PreemptionError;
 
@@ -105,26 +106,34 @@ pub struct PreemptibleFuture<'mutex, Fut, Output, const N: usize>
 where
     Fut: Future<Output = Output>,
 {
-    pub inner: Fut,
-    pub requirements: [&'mutex dyn Revocable; N],
-    pub current_flags: [Option<usize>; N],
+    inner: Fut,
+    requirements: [&'mutex dyn Revocable; N],
+    current_flags: [Option<usize>; N],
 }
 
-// impl<'mutex, Fut, Output, const N: usize> PreemptibleFuture<'mutex, Fut, Output, N>
-// where
-//     Fut: Future<Output = Output>,
-// {
-//     fn from_fn<Args: Tuple, Fun: AsyncFnMut(Args) -> Output>(
-//         fun: Fun,
-//         requirements: [&'mutex dyn Revocable; N],
-//     ) -> Self {
-//         Self {
-//             inner: fun(),
-//             requirements,
-//             current_flags: [None; N],
-//         }
-//     }
-// }
+impl<'mutex, Fut, Output, const N: usize> PreemptibleFuture<'mutex, Fut, Output, N>
+where
+    Fut: Future<Output = Output>,
+{
+    pub fn new(inner: Fut, requirements: [&'mutex dyn Revocable; N]) -> Self {
+        Self {
+            inner,
+            requirements,
+            current_flags: [None; N],
+        }
+    }
+
+    // fn from_fn<Args: Tuple, Fun: AsyncFnMut(Args) -> Output>(
+    //     fun: Fun,
+    //     requirements: [&'mutex dyn Revocable; N],
+    // ) -> Self {
+    //     Self {
+    //         inner: fun(),
+    //         requirements,
+    //         current_flags: [None; N],
+    //     }
+    // }
+}
 
 impl<Fut, Output, const N: usize> Future for PreemptibleFuture<'_, Fut, Output, N>
 where

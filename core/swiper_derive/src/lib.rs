@@ -190,11 +190,10 @@ fn generate_wrapped_function(
         #fn_vis #outer_sig {
             #inner_sig #fn_block
 
-            swiper_stealing::PreemptibleFuture {
-                inner: inner(#(#inner_args),*),
-                requirements: [#(#requirements_arr),*],
-                current_flags: core::default::Default::default()
-            }.await
+            swiper_stealing::PreemptibleFuture::new(
+                inner(#(#inner_args),*),
+                [#(#requirements_arr),*],
+            ).await
         }
     }
 }
@@ -223,11 +222,10 @@ mod tests {
                     x
                 }
 
-                swiper_stealing::PreemptibleFuture {
-                    inner: inner(x),
-                    requirements: [],
-                    current_flags: core::default::Default::default()
-                }.await
+                swiper_stealing::PreemptibleFuture::new(
+                    inner(x),
+                    [],
+                ).await
             }
         }
         .to_string();
@@ -261,11 +259,10 @@ mod tests {
                     x + y
                 }
 
-                swiper_stealing::PreemptibleFuture {
-                    inner: inner( unsafe { *x.data.get() }, y),
-                    requirements: [&x],
-                    current_flags: core::default::Default::default()
-                }.await
+                swiper_stealing::PreemptibleFuture::new(
+                    inner( unsafe { *x.data.get() }, y),
+                    [&x],
+                ).await
             }
         }
         .to_string();
