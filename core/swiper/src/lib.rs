@@ -2,7 +2,7 @@ use swiper_derive::preemptible;
 
 
 #[preemptible(x)]
-async fn idk(x: i32) { x }
+async fn idk(x: i32) -> i32 { x }
 
 #[cfg(test)]
 mod tests {
@@ -14,6 +14,6 @@ mod tests {
     fn it_works() {
 
         #[preemptible(x)]
-        async fn idk(x: i32) { x }
+        async fn idk(x: i32) -> i32 { x }
     }
 }

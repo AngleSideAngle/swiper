@@ -49,7 +49,7 @@ pub trait Revocable {
 /// DOES NOT WORK WITH MULTITHREADED BC CRITICAL SECTIONS FOR ALL ASYNC POLLING NEEDS TO OVERLAP
 // TODO replace bool flag with owning task info for introspection
 pub struct RevocableCell<T> {
-    data: UnsafeCell<T>,
+    pub data: UnsafeCell<T>,
     current_flag: Cell<usize>,
     is_required: Cell<bool>,
 }
@@ -86,6 +86,27 @@ impl<T> Revocable for RevocableCell<T> {
     }
 }
 
+impl<T> Revocable for &RevocableCell<T> {
+    fn steal_flag(&self) -> usize {
+        // revoke previous flag pointer by incrementing
+        self.is_required.set(true);
+        let next_flag = self.current_flag.get().wrapping_add(1);
+        self.current_flag.set(next_flag);
+        next_flag
+    }
+
+    fn return_flag(&self) {
+        self.is_required.set(false);
+    }
+
+    fn get_current_flag(&self) -> usize {
+        self.current_flag.get()
+    }
+
+    fn is_required(&self) -> bool {
+        self.is_required.get()
+    }
+}
 #[derive(Debug, Clone)]
 pub struct PreemptionError;
 
@@ -110,9 +131,9 @@ pub struct PreemptibleFuture<'mutex, Fut, Output, const N: usize>
 where
     Fut: Future<Output = Output>,
 {
-    inner: Fut,
-    requirements: [&'mutex dyn Revocable; N],
-    current_flags: [Option<usize>; N],
+    pub inner: Fut,
+    pub requirements: [&'mutex dyn Revocable; N],
+    pub current_flags: [Option<usize>; N],
 }
 
 // impl<'mutex, Fut, Output, const N: usize> PreemptibleFuture<'mutex, Fut, Output, N>
