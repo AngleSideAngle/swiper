@@ -9,3 +9,5 @@
 !rust-toolchain.toml
 !/core/
 !/core/**
+!/design/
+!/design/**
