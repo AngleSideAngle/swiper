@@ -7,6 +7,7 @@
 !flake.lock
 !flake.nix
 !rust-toolchain.toml
+!README.md
 !/core/
 !/core/**
 !/design/

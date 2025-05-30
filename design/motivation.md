@@ -63,4 +63,24 @@ b) have sole ownership of the hardware they're using for the duration they're ru
 
 ## WPILib Command Based
 
+- requirement management
+- lifecycles
+
+## lifecycles
+
+- behavior trees
+- managed nodes
+- action servers
+
+kill lifecycles with
+
+fn {
+  start();
+  loop {
+    run();
+  }
+  end();
+}
+
+^ this is simpler, more intuitive, way more ergonomic
 
