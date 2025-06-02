@@ -10,7 +10,7 @@ use core::{
     task::{Context, Poll},
 };
 
-/// Contains metadata about a thief/[`PreemptibleFuture`]
+/// Contains metadata about a [`PreemptibleFuture`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThiefInfo {
     name: &'static str,
@@ -22,7 +22,7 @@ impl Display for ThiefInfo {
     }
 }
 
-/// Contains metadata about a requirement/[`RevocableCell`]
+/// Contains metadata about a [`RevocableCell`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequirementInfo {
     name: &'static str,
@@ -34,24 +34,25 @@ impl Display for RequirementInfo {
     }
 }
 
-/// Allows a "flag" to be stolen or released by a flag holder.
+/// Keeps track of the current owner of a requirement.
 ///
-/// Flag owners must ensure they have continued access by checking their assigned `usize` against the current counter value provided by [`get_counter`](Self::get_counter).
+/// Thiefs ([`PreemptibleFuture`]) acts as guards to the requirement by ensuring they do not access a revoked requirement.
+/// Requirements should be checked for equality using `std::ptr::eq`, rather than `ThiefInfo` because `ThiefInfo` is not unique.
 ///
 /// This provides a type-independent reference to downcast `RevocableCell<T>` into.
-pub trait Revocable {
-    /// Increments the internal counter by 1 (wrapping addition) and returns the new value.
-    ///
-    /// This also registers a new flag holder.
-    /// TODO replace Cell<bool> with owner info
+pub trait Requirement {
+    /// Sets the current owner of this requirement to the provided `thief`.
+    /// This will revoke access to the previous owner, if it existed.
     fn steal_ownership(&self, thief: &ThiefInfo);
 
     /// Releases the current flag owner.
+    /// This means no thief will have access to this requirement.
     fn release_ownership(&self);
 
-    /// Gets information on the current owner.
+    /// Returns information about the current flag owner.
     fn current_owner(&self) -> Option<&ThiefInfo>;
 
+    /// Returns information about the current requirement.
     fn info(&self) -> RequirementInfo;
 }
 
@@ -60,34 +61,34 @@ pub trait Revocable {
 /// This struct cannot be directly used in a safe manner, and must be accessed inside a [`PreemptibleFuture`].
 pub struct RevocableCell<T> {
     pub data: UnsafeCell<T>,
-    flag_holder: Cell<Option<NonNull<ThiefInfo>>>,
+    owner: Cell<Option<NonNull<ThiefInfo>>>,
     name: &'static str,
 }
 
 impl<T> RevocableCell<T> {
     /// Creates a new [`RevocableCell`] with ownership of `data`.
     ///
-    /// The cell will default having no owner (eg. is_required -> false).
+    /// The cell will default having no owner.
     pub fn new(data: T, name: &'static str) -> Self {
         Self {
             data: data.into(),
-            flag_holder: Cell::new(None),
+            owner: Cell::new(None),
             name,
         }
     }
 }
 
-impl<T> Revocable for RevocableCell<T> {
+impl<T> Requirement for RevocableCell<T> {
     fn steal_ownership(&self, thief: &ThiefInfo) {
-        self.flag_holder.set(Some(thief.into()));
+        self.owner.set(Some(thief.into()));
     }
 
     fn release_ownership(&self) {
-        self.flag_holder.set(None);
+        self.owner.set(None);
     }
 
     fn current_owner(&self) -> Option<&ThiefInfo> {
-        self.flag_holder.get().map(|ptr| unsafe { ptr.as_ref() })
+        self.owner.get().map(|ptr| unsafe { ptr.as_ref() })
     }
 
     fn info(&self) -> RequirementInfo {
@@ -106,16 +107,19 @@ pub type Result<T> = core::result::Result<T, PreemptionError>;
 
 impl Display for PreemptionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // write!(
-        //     f,
-        //     "outgoing task {} was preempted by incoming task {} stealing its requirement {}",
-        //     self.outgoing, self.incoming, self.requirement
-        // )
-        write!(
-            f,
-            "outgoing task {} was preempted by an incoming task stealing its requirement {}",
-            self.outgoing, self.requirement
-        )
+        if let Some(incoming) = self.incoming {
+            write!(
+                f,
+                "outgoing task {} was preempted by incoming task {} stealing its requirement {}",
+                self.outgoing, incoming, self.requirement
+            )
+        } else {
+            write!(
+                f,
+                "outgoing task {} was preempted by an unknown incoming task stealing its requirement {}",
+                self.outgoing, self.requirement
+            )
+        }
     }
 }
 
@@ -132,7 +136,7 @@ where
 {
     inner: Fut,
     pub info: ThiefInfo,
-    requirements: [&'mutex dyn Revocable; N],
+    requirements: [&'mutex dyn Requirement; N],
     first_run: bool,
 }
 
@@ -140,7 +144,7 @@ impl<'mutex, Fut, Output, const N: usize> PreemptibleFuture<'mutex, Fut, Output,
 where
     Fut: Future<Output = Output>,
 {
-    pub fn new(inner: Fut, name: &'static str, requirements: [&'mutex dyn Revocable; N]) -> Self {
+    pub fn new(inner: Fut, name: &'static str, requirements: [&'mutex dyn Requirement; N]) -> Self {
         Self {
             inner,
             info: ThiefInfo { name },
@@ -165,6 +169,8 @@ where
         let inner = unsafe { Pin::new_unchecked(&mut instance.inner) };
         let info = unsafe { Pin::new_unchecked(&mut instance.info) }.get_mut();
 
+        // steal ownership of all resources on first run
+        // otherwise check if the `current_owner()` of reach resource points to this `ThiefInfo`
         if instance.first_run {
             instance
                 .requirements
@@ -173,10 +179,12 @@ where
             instance.first_run = false;
         } else {
             for requirement in instance.requirements {
-                // cancel if requirement is owned by a different task
+                // cancel if requirement is owned by a different task or not owned by any task
+                // having a requirement not be owned should not actually occur (since it's physically unsafe)
+                // but it is a valid state so it must be handled
                 let incoming = if let Some(owner) = requirement.current_owner() {
                     if ptr::eq(owner, info) {
-                        continue; // requirement is owned and owned by instance
+                        continue;
                     }
                     Some(*owner)
                 } else {
@@ -192,6 +200,7 @@ where
             }
         }
 
+        // we verified ownership of all resources now
         let res = inner.poll(cx).map(Ok);
         if res.is_ready() {
             for req in instance.requirements {
@@ -212,7 +221,6 @@ mod tests {
     use super::*;
 
     use std::boxed::Box;
-    use std::println;
 
     struct CountForever<'a> {
         num: &'a mut i32,

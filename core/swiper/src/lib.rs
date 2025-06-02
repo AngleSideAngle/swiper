@@ -1,14 +1,12 @@
-use swiper_derive::preemptible;
-
 #[cfg(test)]
 mod tests {
     use core::task;
-    use std::{ptr, task::{Context, Poll}};
+    use std::task::{Context, Poll};
 
     use futures_lite::future;
     use lite_async_test::async_test;
     use swiper_derive::preemptible;
-    use swiper_stealing::{PreemptionError, Revocable, RevocableCell};
+    use swiper_stealing::{PreemptionError, Requirement, RevocableCell};
 
     #[test]
     fn basic_preemption() {
