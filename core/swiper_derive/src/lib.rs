@@ -2,10 +2,10 @@ extern crate proc_macro;
 
 use core::fmt;
 
-use quote::{ToTokens, format_ident};
+use quote::{format_ident, ToTokens};
 use syn::{
-    Error, Expr, FnArg, Ident, ItemFn, Pat, PatType, ReturnType, parse_macro_input, parse_quote,
-    punctuated::Punctuated,
+    parse_macro_input, parse_quote, punctuated::Punctuated, Error, Expr, FnArg, Ident, ItemFn, Pat,
+    PatType, ReturnType,
 };
 
 // two macros
@@ -118,7 +118,7 @@ fn single_fn_to_ir(input: &ItemFn, wrapped_names: &[Ident]) -> syn::Result<Inter
                         });
                         inner_params.push(parse_quote! { #pat: #ty });
                         inner_args.push(parse_quote! { unsafe { *#pat.data.get() } });
-                        requirements_arr.push(parse_quote! { &#ident });
+                        requirements_arr.push(parse_quote! { #ident });
                     } else {
                         outer_params.push(parse_quote! {
                             #(#attrs)*
@@ -171,13 +171,11 @@ fn generate_wrapped_function(
     };
     outer_sig.output = ReturnType::Type(
         syn::token::RArrow::default(),
-        Box::new(
-            parse_quote! { core::result::Result<#prev_output, swiper_stealing::PreemptionError> },
-        ),
+        Box::new(parse_quote! { swiper_stealing::Result<#prev_output> }),
     );
 
     let mut inner_sig = input.sig.clone();
-    inner_sig.ident = format_ident!("inner");
+    inner_sig.ident = format_ident!("__inner");
     inner_sig.inputs.clear();
     inner_sig.inputs.extend(inner_params);
 
@@ -185,13 +183,16 @@ fn generate_wrapped_function(
     let fn_attrs = &input.attrs;
     let fn_vis = &input.vis;
 
+    let name = &input.sig.ident.to_string();
+
     parse_quote! {
         #(#fn_attrs)*
         #fn_vis #outer_sig {
             #inner_sig #fn_block
 
             swiper_stealing::PreemptibleFuture::new(
-                inner(#(#inner_args),*),
+                __inner(#(#inner_args),*),
+                #name,
                 [#(#requirements_arr),*],
             ).await
         }
@@ -217,13 +218,14 @@ mod tests {
         .to_string();
 
         let expected = quote::quote! {
-            async fn eg(x: i32) -> core::result::Result<i32, swiper_stealing::PreemptionError> {
-                async fn inner(x: i32) -> i32 {
+            async fn eg(x: i32) -> swiper_stealing::Result<i32> {
+                async fn __inner(x: i32) -> i32 {
                     x
                 }
 
                 swiper_stealing::PreemptibleFuture::new(
-                    inner(x),
+                    __inner(x),
+                    "eg",
                     [],
                 ).await
             }
@@ -254,13 +256,14 @@ mod tests {
         .to_string();
 
         let expected = quote::quote! {
-            async fn eg(x: &swiper_stealing::RevocableCell<i32>, y: i32) -> core::result::Result<i32, swiper_stealing::PreemptionError> {
-                async fn inner(x: i32, y: i32) -> i32 {
+            async fn eg(x: &swiper_stealing::RevocableCell<i32>, y: i32) -> swiper_stealing::Result<i32> {
+                async fn __inner(x: i32, y: i32) -> i32 {
                     x + y
                 }
 
                 swiper_stealing::PreemptibleFuture::new(
-                    inner( unsafe { *x.data.get() }, y),
+                    __inner( unsafe { *x.data.get() }, y),
+                    "eg",
                     [&x],
                 ).await
             }
@@ -288,7 +291,7 @@ mod tests {
                 parse_quote! { unsafe { *a.data.get() } },
                 parse_quote! { b },
             ],
-            requirements_arr: vec![parse_quote! {&a}],
+            requirements_arr: vec![parse_quote! {a}],
         };
 
         assert_eq!(out, expected);

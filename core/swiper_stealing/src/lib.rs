@@ -1,4 +1,3 @@
-// #![cfg_attr(not(feature = "std"), no_std)]
 #![no_std]
 #![doc = include_str!("../README.md")]
 
@@ -7,11 +6,12 @@ use core::{
     fmt::Display,
     future::Future,
     pin::Pin,
+    ptr::{self, NonNull},
     task::{Context, Poll},
 };
 
 /// Contains metadata about a thief/[`PreemptibleFuture`]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThiefInfo {
     name: &'static str,
 }
@@ -23,7 +23,7 @@ impl Display for ThiefInfo {
 }
 
 /// Contains metadata about a requirement/[`RevocableCell`]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequirementInfo {
     name: &'static str,
 }
@@ -44,16 +44,13 @@ pub trait Revocable {
     ///
     /// This also registers a new flag holder.
     /// TODO replace Cell<bool> with owner info
-    fn steal_flag(&self, thief: ThiefInfo) -> usize;
+    fn steal_ownership(&self, thief: &ThiefInfo);
 
     /// Releases the current flag owner.
-    fn release_flag(&self);
+    fn release_ownership(&self);
 
-    /// Returns the current value of the internal counter.
-    fn counter(&self) -> usize;
-
-    /// Gets information on the current flag holder.
-    fn flag_holder(&self) -> Option<ThiefInfo>;
+    /// Gets information on the current owner.
+    fn current_owner(&self) -> Option<&ThiefInfo>;
 
     fn info(&self) -> RequirementInfo;
 }
@@ -63,65 +60,44 @@ pub trait Revocable {
 /// This struct cannot be directly used in a safe manner, and must be accessed inside a [`PreemptibleFuture`].
 pub struct RevocableCell<T> {
     pub data: UnsafeCell<T>,
-    current_flag: Cell<usize>,
-    flag_holder: Cell<Option<ThiefInfo>>,
+    flag_holder: Cell<Option<NonNull<ThiefInfo>>>,
+    name: &'static str,
 }
 
 impl<T> RevocableCell<T> {
     /// Creates a new [`RevocableCell`] with ownership of `data`.
     ///
     /// The cell will default having no owner (eg. is_required -> false).
-    pub fn new(data: T) -> Self {
+    pub fn new(data: T, name: &'static str) -> Self {
         Self {
             data: data.into(),
-            current_flag: Cell::new(0),
             flag_holder: Cell::new(None),
+            name,
         }
     }
 }
 
 impl<T> Revocable for RevocableCell<T> {
-    fn steal_flag(&self, thief: ThiefInfo) -> usize {
-        self.flag_holder.set(Some(thief));
-        let next_flag = self.current_flag.get().wrapping_add(1);
-        self.current_flag.set(next_flag);
-        next_flag
+    fn steal_ownership(&self, thief: &ThiefInfo) {
+        self.flag_holder.set(Some(thief.into()));
     }
 
-    fn release_flag(&self) {
+    fn release_ownership(&self) {
         self.flag_holder.set(None);
     }
 
-    fn counter(&self) -> usize {
-        self.current_flag.get()
+    fn current_owner(&self) -> Option<&ThiefInfo> {
+        self.flag_holder.get().map(|ptr| unsafe { ptr.as_ref() })
     }
 
-    fn flag_holder(&self) -> Option<ThiefInfo> {
-        self.flag_holder.get()
-    }
-}
-
-impl<T> Revocable for &RevocableCell<T> {
-    fn steal_flag(&self, thief: ThiefInfo) -> usize {
-        (**self).steal_flag(thief)
-    }
-
-    fn release_flag(&self) {
-        (**self).release_flag();
-    }
-
-    fn counter(&self) -> usize {
-        (**self).counter()
-    }
-
-    fn flag_holder(&self) -> Option<ThiefInfo> {
-        (**self).flag_holder()
+    fn info(&self) -> RequirementInfo {
+        RequirementInfo { name: self.name }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreemptionError {
-    incoming: ThiefInfo,
+    incoming: Option<ThiefInfo>,
     outgoing: ThiefInfo,
     requirement: RequirementInfo,
 }
@@ -130,18 +106,16 @@ pub type Result<T> = core::result::Result<T, PreemptionError>;
 
 impl Display for PreemptionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // write!(
+        //     f,
+        //     "outgoing task {} was preempted by incoming task {} stealing its requirement {}",
+        //     self.outgoing, self.incoming, self.requirement
+        // )
         write!(
             f,
-            "outgoing task {} was preempted by incoming task {} stealing its requirement {}",
-            self.outgoing, self.incoming, self.requirement
+            "outgoing task {} was preempted by an incoming task stealing its requirement {}",
+            self.outgoing, self.requirement
         )
-    }
-}
-
-impl PartialEq for PreemptionError {
-    fn eq(&self, other: &Self) -> bool {
-        true
-        // TODO fix type
     }
 }
 
@@ -157,9 +131,9 @@ where
     Fut: Future<Output = Output>,
 {
     inner: Fut,
-    name: &'static str,
+    pub info: ThiefInfo,
     requirements: [&'mutex dyn Revocable; N],
-    current_flags: [Option<usize>; N],
+    first_run: bool,
 }
 
 impl<'mutex, Fut, Output, const N: usize> PreemptibleFuture<'mutex, Fut, Output, N>
@@ -169,26 +143,11 @@ where
     pub fn new(inner: Fut, name: &'static str, requirements: [&'mutex dyn Revocable; N]) -> Self {
         Self {
             inner,
-            name,
+            info: ThiefInfo { name },
             requirements,
-            current_flags: [None; N],
+            first_run: true,
         }
     }
-
-    pub fn metadata(&self) -> ThiefInfo {
-        ThiefInfo { name: self.name }
-    }
-
-    // fn from_fn<Args: Tuple, Fun: AsyncFnMut(Args) -> Output>(
-    //     fun: Fun,
-    //     requirements: [&'mutex dyn Revocable; N],
-    // ) -> Self {
-    //     Self {
-    //         inner: fun(),
-    //         requirements,
-    //         current_flags: [None; N],
-    //     }
-    // }
 }
 
 impl<Fut, Output, const N: usize> Future for PreemptibleFuture<'_, Fut, Output, N>
@@ -204,27 +163,39 @@ where
         // and the movement sensitive part (inner Future) needs to be re-pinned
         let instance = unsafe { self.get_unchecked_mut() };
         let inner = unsafe { Pin::new_unchecked(&mut instance.inner) };
+        let info = unsafe { Pin::new_unchecked(&mut instance.info) }.get_mut();
 
-        for (requirement, flag) in instance
-            .requirements
-            .iter()
-            .zip(instance.current_flags.iter_mut())
-        {
-            let current_flag = flag.get_or_insert_with(|| requirement.steal_flag(self.metadata()));
+        if instance.first_run {
+            instance
+                .requirements
+                .iter()
+                .for_each(|req| req.steal_ownership(info));
+            instance.first_run = false;
+        } else {
+            for requirement in instance.requirements {
+                // cancel if requirement is owned by a different task
+                let incoming = if let Some(owner) = requirement.current_owner() {
+                    if ptr::eq(owner, info) {
+                        continue; // requirement is owned and owned by instance
+                    }
+                    Some(*owner)
+                } else {
+                    None
+                };
 
-            if *current_flag != requirement.counter() {
                 let err = PreemptionError {
-                    incoming: (*requirement).flag_holder(),
-                    
-                }
-                return Poll::Ready(Err(PreemptionError {}));
+                    incoming,
+                    outgoing: *info,
+                    requirement: requirement.info(),
+                };
+                return Poll::Ready(Err(err));
             }
         }
 
         let res = inner.poll(cx).map(Ok);
         if res.is_ready() {
             for req in instance.requirements {
-                req.release_flag();
+                req.release_ownership();
             }
         }
         res
@@ -234,9 +205,14 @@ where
 #[cfg(test)]
 mod tests {
 
-    use core::task;
+    use core::{ptr, task};
+
+    extern crate std;
 
     use super::*;
+
+    use std::boxed::Box;
+    use std::println;
 
     struct CountForever<'a> {
         num: &'a mut i32,
@@ -256,24 +232,35 @@ mod tests {
 
     #[test]
     fn flag_stealing() {
-        let cell = RevocableCell::new(0);
+        let cell = RevocableCell::new(0, "test");
+        let thief1 = ThiefInfo { name: "test" };
+        let thief2 = ThiefInfo { name: "test" };
         {
-            assert!(!cell.flag_holder());
-            let a = cell.steal_flag();
-            assert!(cell.flag_holder());
-            assert_eq!(a, cell.current_flag.get());
+            assert!(cell.current_owner().is_none());
+            cell.steal_ownership(&thief1);
+            assert!(ptr::eq(
+                cell.current_owner().expect("should be owned"),
+                &thief1
+            ));
             // steal new flag
-            let b = cell.steal_flag();
-            assert_ne!(a, cell.current_flag.get());
-            assert_eq!(b, cell.current_flag.get());
-            assert!(cell.flag_holder());
+            cell.steal_ownership(&thief2);
+            assert!(cell.current_owner().is_some());
+            assert!(ptr::eq(
+                cell.current_owner().expect("should be owned"),
+                &thief2
+            ));
+            assert!(!ptr::eq(
+                cell.current_owner().expect("should be owned"),
+                &thief1
+            ));
         }
-        // assert!(!cell.is_required());
+        cell.release_ownership();
+        assert!(cell.current_owner().is_none());
     }
 
     #[test]
     fn future_mutexing() {
-        let resource = RevocableCell::new(0);
+        let resource = RevocableCell::new(0, "test");
 
         let plus_5 = CountForever {
             num: unsafe { &mut *resource.data.get() },
@@ -284,16 +271,8 @@ mod tests {
             incr: -1,
         };
 
-        let plus_5 = PreemptibleFuture {
-            inner: plus_5,
-            requirements: [&resource],
-            current_flags: Default::default(),
-        };
-        let minus_1 = PreemptibleFuture {
-            inner: minus_1,
-            requirements: [&resource],
-            current_flags: Default::default(),
-        };
+        let plus_5 = PreemptibleFuture::new(plus_5, "plus_5", [&resource]);
+        let minus_1 = PreemptibleFuture::new(minus_1, "minus_1", [&resource]);
 
         // start by polling plus_5
         let mut cx_plus_5 = Context::from_waker(task::Waker::noop());
@@ -313,10 +292,15 @@ mod tests {
         assert_eq!(unsafe { *resource.data.get() }, 9);
 
         // poll plus_5 again, should finish with preemption error
+        let expected_err = PreemptionError {
+            incoming: Some(pinned_minus_1.info),
+            outgoing: pinned_plus_5.info,
+            requirement: resource.info(),
+        };
         let res = pinned_plus_5.as_mut().poll(&mut cx_plus_5);
         assert!(res.is_ready());
         assert_eq!(unsafe { *resource.data.get() }, 9);
-        assert_eq!(res, Poll::Ready(Result::Err(PreemptionError {})));
+        assert_eq!(res, Poll::Ready(Result::Err(expected_err)));
 
         // minus_1 should still work
         let res = pinned_minus_1.as_mut().poll(&mut cx_minus_1);
