@@ -114,7 +114,7 @@ fn single_fn_to_ir(input: &ItemFn, wrapped_names: &[Ident]) -> syn::Result<Inter
                     if wrapped_names.is_empty() || wrapped_names.contains(&ident.ident) {
                         outer_params.push(parse_quote! {
                             #(#attrs)*
-                            #pat: &swiper_stealing::RevocableCell<#ty>
+                            #pat: &swiper_stealing::thief::RevocableCell<#ty>
                         });
                         inner_params.push(parse_quote! { #pat: #ty });
                         inner_args.push(parse_quote! { unsafe { *#pat.data.get() } });
@@ -241,7 +241,7 @@ mod tests {
             &parse_quote! { async fn eg(x: i32, y: i32) -> i32 { x + y } },
             IntermediateRepr {
                 outer_params: vec![
-                    parse_quote! { x: &swiper_stealing::RevocableCell<i32> },
+                    parse_quote! { x: &swiper_stealing::thief::RevocableCell<i32> },
                     parse_quote! { y: i32 },
                 ],
                 inner_params: vec![parse_quote! { x: i32 }, parse_quote! { y: i32 }],
@@ -256,7 +256,7 @@ mod tests {
         .to_string();
 
         let expected = quote::quote! {
-            async fn eg(x: &swiper_stealing::RevocableCell<i32>, y: i32) -> swiper_stealing::Result<i32> {
+            async fn eg(x: &swiper_stealing::thief::RevocableCell<i32>, y: i32) -> swiper_stealing::Result<i32> {
                 async fn __inner(x: i32, y: i32) -> i32 {
                     x + y
                 }
@@ -283,7 +283,7 @@ mod tests {
 
         let expected = IntermediateRepr {
             outer_params: vec![
-                parse_quote! { a: &swiper_stealing::RevocableCell<i32>},
+                parse_quote! { a: &swiper_stealing::thief::RevocableCell<i32>},
                 parse_quote! { b: i32 },
             ],
             inner_params: vec![parse_quote! { a: i32 }, parse_quote! { b: i32 }],
