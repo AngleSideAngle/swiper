@@ -110,7 +110,7 @@ mod tests {
             wait_ticks(5).await;
             set(&data, 0).await?;
             data_assert(&data, |x| x == 0).await?;
-            Ok::<(), PreemptionError>(())
+            Ok(())
         };
 
         let (a, b) = future::zip(wait_5_then_reset(), increment_n_times(&data, 100)).await;
