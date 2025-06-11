@@ -1,4 +1,4 @@
-use crate::{PreemptionError, Result};
+use crate::{requirement::RevocableCell, PreemptionError, Result};
 use core::{
     fmt::Display,
     pin::Pin,
@@ -108,10 +108,34 @@ where
     }
 }
 
+impl<T> RevocableCell<T> {
+    /// Creates a future that provides access to this cell's inner data when polled.
+    ///
+    /// Consistent with the functionality of `PreemptibleFuture`, this future
+    /// will be cancelled as soon as it is polled after an incoming
+    /// `PreemptibleFuture` is first polled.
+    ///
+    /// # Errors
+    ///
+    /// If access to this `RevocableCell` has been stolen by a different future,
+    /// this future will return `Err<PreemptionError>` with metadata about the
+    /// event. Otherwise, the future will run to completation and return the
+    /// wrapped function's return value as `Ok`.
+    pub async fn run<Out>(
+        &self,
+        name: &'static str,
+        func: impl AsyncFnOnce(&mut T) -> Out,
+    ) -> Result<Out>
+    {
+        let inner = func(unsafe { &mut *self.data.get() });
+        PreemptibleFuture::new(inner, name, [self]).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
-    use core::task;
+    use core::{future::poll_fn, task};
 
     use crate::requirement::RevocableCell;
     extern crate std;
@@ -119,37 +143,13 @@ mod tests {
     use super::*;
     use std::boxed::Box;
 
-    struct CountForever<'a> {
-        num: &'a mut i32,
-        incr: i32,
-    }
-
-    impl Future for CountForever<'_> {
-        type Output = i32;
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let instance = unsafe { self.get_unchecked_mut() };
-            *instance.num += instance.incr;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    }
 
     #[test]
     fn future_mutexing() {
         let resource = RevocableCell::new(0, "test");
 
-        let plus_5 = CountForever {
-            num: unsafe { &mut *resource.data.get() },
-            incr: 5,
-        };
-        let minus_1 = CountForever {
-            num: unsafe { &mut *resource.data.get() },
-            incr: -1,
-        };
-
-        let plus_5 = PreemptibleFuture::new(plus_5, "plus_5", [&resource]);
-        let minus_1 = PreemptibleFuture::new(minus_1, "minus_1", [&resource]);
+        let plus_5 = resource.run("plus_5", async |x| poll_fn(|_| {*x+= 5; Poll::<()>::Pending}).await );
+        let minus_1 = resource.run("minus_1", async |x| poll_fn(|_| {*x-= 1; Poll::<()>::Pending}).await );
 
         // start by polling plus_5
         let mut cx_plus_5 = Context::from_waker(task::Waker::noop());
@@ -169,19 +169,26 @@ mod tests {
         assert_eq!(unsafe { *resource.data.get() }, 9);
 
         // poll plus_5 again, should finish with preemption error
-        let expected_err = PreemptionError {
-            incoming: Some(pinned_minus_1.info),
-            outgoing: pinned_plus_5.info,
-            requirement: resource.info(),
-        };
         let res = pinned_plus_5.as_mut().poll(&mut cx_plus_5);
         assert!(res.is_ready());
         assert_eq!(unsafe { *resource.data.get() }, 9);
-        assert_eq!(res, Poll::Ready(Result::Err(expected_err)));
+
+        if let Poll::Ready(Result::Err(PreemptionError { incoming, outgoing, requirement })) = res {
+            assert!(incoming.is_some_and(|inc| inc.name == "minus_1"));
+            assert_eq!(outgoing.name, "plus_5");
+            assert_eq!(requirement, resource.info());
+        }
 
         // minus_1 should still work
         let res = pinned_minus_1.as_mut().poll(&mut cx_minus_1);
         assert!(res.is_pending());
         assert_eq!(unsafe { *resource.data.get() }, 8);
+    }
+
+    #[test]
+    fn idk() {
+        let data = 2;
+        let cell = RevocableCell::new(data, "hi");
+        let ad = cell.run("hmm", async |a| *a += 1);
     }
 }

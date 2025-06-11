@@ -4,7 +4,7 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::preemptible_future::ThiefInfo;
+use crate::thief::ThiefInfo;
 
 /// Contains metadata about a [`RevocableCell`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -6,7 +6,7 @@ mod tests {
     use futures_lite::future;
     use lite_async_test::async_test;
     use swiper_derive::preemptible;
-    use swiper_stealing::{PreemptionError, Requirement, RevocableCell};
+    use swiper_stealing::requirement::{Requirement, RevocableCell};
 
     #[test]
     fn basic_preemption() {
