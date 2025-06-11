@@ -1,4 +1,4 @@
-use crate::{requirement::RevocableCell, PreemptionError, Result};
+use crate::{PreemptionError, Result, requirement::RevocableCell};
 use core::{
     fmt::Display,
     pin::Pin,
@@ -125,8 +125,7 @@ impl<T> RevocableCell<T> {
         &self,
         name: &'static str,
         func: impl AsyncFnOnce(&mut T) -> Out,
-    ) -> Result<Out>
-    {
+    ) -> Result<Out> {
         let inner = func(unsafe { &mut *self.data.get() });
         PreemptibleFuture::new(inner, name, [self]).await
     }
@@ -143,13 +142,24 @@ mod tests {
     use super::*;
     use std::boxed::Box;
 
-
     #[test]
     fn future_mutexing() {
         let resource = RevocableCell::new(0, "test");
 
-        let plus_5 = resource.run("plus_5", async |x| poll_fn(|_| {*x+= 5; Poll::<()>::Pending}).await );
-        let minus_1 = resource.run("minus_1", async |x| poll_fn(|_| {*x-= 1; Poll::<()>::Pending}).await );
+        let plus_5 = resource.run("plus_5", async |x| {
+            poll_fn(|_| {
+                *x += 5;
+                Poll::<()>::Pending
+            })
+            .await
+        });
+        let minus_1 = resource.run("minus_1", async |x| {
+            poll_fn(|_| {
+                *x -= 1;
+                Poll::<()>::Pending
+            })
+            .await
+        });
 
         // start by polling plus_5
         let mut cx_plus_5 = Context::from_waker(task::Waker::noop());
@@ -173,7 +183,12 @@ mod tests {
         assert!(res.is_ready());
         assert_eq!(unsafe { *resource.data.get() }, 9);
 
-        if let Poll::Ready(Result::Err(PreemptionError { incoming, outgoing, requirement })) = res {
+        if let Poll::Ready(Result::Err(PreemptionError {
+            incoming,
+            outgoing,
+            requirement,
+        })) = res
+        {
             assert!(incoming.is_some_and(|inc| inc.name == "minus_1"));
             assert_eq!(outgoing.name, "plus_5");
             assert_eq!(requirement, resource.info());
@@ -183,12 +198,5 @@ mod tests {
         let res = pinned_minus_1.as_mut().poll(&mut cx_minus_1);
         assert!(res.is_pending());
         assert_eq!(unsafe { *resource.data.get() }, 8);
-    }
-
-    #[test]
-    fn idk() {
-        let data = 2;
-        let cell = RevocableCell::new(data, "hi");
-        let ad = cell.run("hmm", async |a| *a += 1);
     }
 }
