@@ -96,6 +96,9 @@ dependencies = [
 [[package]]
 name = "swiper-stealing"
 version = "0.0.0"
+dependencies = [
+ "futures-lite",
+]
 
 [[package]]
 name = "swiper_proxy"

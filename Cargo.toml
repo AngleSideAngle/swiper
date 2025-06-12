@@ -15,3 +15,7 @@ homepage = "https://github.com/AngleSideAngle/swiper"
 swiper = { path = "core/swiper" }
 swiper-stealing = { path = "core/swiper_stealing" }
 swiper-derive = { path = "core/swiper_derive" }
+
+# for testing
+lite-async-test = "0.1"
+futures-lite = "2.6"

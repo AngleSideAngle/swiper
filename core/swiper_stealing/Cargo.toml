@@ -11,6 +11,9 @@ repository.workspace = true
 
 [dependencies]
 
+[dev-dependencies]
+futures-lite = { workspace = true }
+
 [features]
 default = ["std"]
 std = []

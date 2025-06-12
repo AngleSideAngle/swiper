@@ -151,14 +151,14 @@ mod tests {
                 *x += 5;
                 Poll::<()>::Pending
             })
-            .await
+            .await;
         });
         let minus_1 = resource.run("minus_1", async |x| {
             poll_fn(|_| {
                 *x -= 1;
                 Poll::<()>::Pending
             })
-            .await
+            .await;
         });
 
         // start by polling plus_5

@@ -12,6 +12,7 @@ pub struct PreemptionError {
     requirement: requirement::RequirementInfo,
 }
 
+/// Result that is either `Ok` or `PreemptionError`
 pub type Result<T> = core::result::Result<T, PreemptionError>;
 
 impl core::fmt::Display for PreemptionError {
